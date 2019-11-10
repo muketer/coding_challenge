@@ -1,12 +1,10 @@
 import pandas as pd
 import numpy as np
+
 import datetime as dt
 
-'''
-impclk.csv : 525,860 rows
-states.csv : 805,714 rows
-state.csv - 'ip_from ~ ip_to' 탐색 범위 : 1,586,252,464
-'''
+import multiprocessing as mp
+
 
 class PreTest:
 
@@ -19,11 +17,12 @@ class PreTest:
         self.result_filename = file_folder + 'final_result.csv'
         self.result_total_sum_filename = file_folder + 'total_sum.csv'
 
-        self.join_idx_name = 'idx'
-
         self.df_imp_click = pd.read_csv(filename_imp_click)
         self.df_adname = pd.read_csv(filename_adname)
         self.df_ip_region = pd.read_csv(filename_ip_region)
+
+        self.df_ip_region_arr = None
+        self.distinct_ips = None
 
     def df_treat(self):
         self.df_imp_click = pd.merge(self.df_imp_click, self.df_adname, how='left', on='lineitem_id')
@@ -31,29 +30,43 @@ class PreTest:
 
         self.df_ip_region.fillna(0, inplace=True)
 
-    def ip_compare_join(self):
-        ip_idx = pd.Index(self.df_imp_click.ip)
-        start_ip_idx = pd.Index(self.df_ip_region.ip_from)
-        end_ip_idx = pd.Index(self.df_ip_region.ip_to) + 1
+        self.df_ip_region_arr = self.df_ip_region.values
 
-        start_idx = start_ip_idx.searchsorted(ip_idx, side='right') - 1
-        end_idx = end_ip_idx.searchsorted(ip_idx, side='right')
+        self.distinct_ips = np.array(sorted(self.df_imp_click.ip.unique()))
 
-        self.df_imp_click[self.join_idx_name] = np.where(start_idx==end_idx, end_idx, np.nan)
+    def one_ip_compare(self, addr_):
+        df_one_ip_compare = np.hstack([self.df_ip_region_arr, np.full((len(self.df_ip_region_arr), 1), addr_)])
 
-        self.df_imp_click = pd.merge(
-            self.df_imp_click, self.df_ip_region, how='left', left_on=[self.join_idx_name], right_index=True
-        )
-        self.df_imp_click.fillna('0', inplace=True)
-        self.df_imp_click = self.df_imp_click[
-            ['ip', 'lineitem_id', 'impression', 'clk', 'item_name', 'region']
-        ]
+        df_one_ip_compare_is_include = (df_one_ip_compare[:, 3] >= df_one_ip_compare[:, 0]) &\
+                                       (df_one_ip_compare[:, 3] <= df_one_ip_compare[:, 1])
+
+        # try:
+        #     return_value = df_one_ip_compare[np.where(df_one_ip_compare_is_include == True)[0][0], 2]
+        #     print(return_value)
+        #     # end_time = dt.datetime.now()
+        #     # print(end_time - start_time)
+        #     return return_value
+        # except:
+        #     end_time = dt.datetime.now()
+        #     print(end_time - start_time)
+        #     return '0'
+
+        if True in df_one_ip_compare_is_include:
+            return df_one_ip_compare[np.where(df_one_ip_compare_is_include)[0][0], 2]
+        else:
+            return '0'
+
+    def final_merge(self, result_list_):
+        df_ip_region_matcher = pd.DataFrame({
+            'ip': sorted(self.df_imp_click.ip.unique()),
+            'region': result_list_
+        })
+        self.df_imp_click = pd.merge(self.df_imp_click, df_ip_region_matcher, how='left', on='ip')
 
     def export_result(self):
         self.df_imp_click.to_csv(self.result_filename)
         self.df_imp_click.groupby(['item_name', 'region'])['impression', 'clk'].sum().to_csv(
-            self.result_total_sum_filename
-        )
+            self.result_total_sum_filename)
 
 
 if __name__ == '__main__':
@@ -63,10 +76,24 @@ if __name__ == '__main__':
     pre_test = PreTest()
     pre_test.df_treat()
 
-    pre_test.ip_compare_join()
+    pool = mp.Pool(mp.cpu_count())
+
+    result_list = pool.map(pre_test.one_ip_compare, pre_test.distinct_ips)
+
+    pool.close()
+    pool.join()
+
+    pre_test.final_merge(result_list)
 
     pre_test.export_result()
 
     end_time = dt.datetime.now()
     print(end_time - start_time)
-    # 0: 00:06.938431
+
+    # 3: 06:35.833723
+
+    # 2019 - 08 - 11 15: 49:49.003003
+    # 2: 36:39.233091
+
+    # 2019 - 08 - 11 13: 11:30.354041
+    # 2: 23:13.368116
